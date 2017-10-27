@@ -2,9 +2,12 @@ module Shoryuken
   class Manager
     include Util
 
+    attr_accessor :current_messages
+
     BATCH_LIMIT = 10
     # See https://github.com/phstc/shoryuken/issues/348#issuecomment-292847028
     MIN_DISPATCH_INTERVAL = 0.1
+
 
     def initialize(fetcher, polling_strategy, concurrency, executor)
       @fetcher          = fetcher
@@ -13,10 +16,18 @@ module Shoryuken
       @busy_processors  = Concurrent::AtomicFixnum.new(0)
       @executor         = executor
       @running          = Concurrent::AtomicBoolean.new(true)
+      @current_messages = []
     end
 
     def start
       dispatch_loop
+    end
+
+    def shutdown_callback
+      @current_messages.each do |sqs_msg|
+        logger.info "setting message visability to  120: #{sqs_msg}"
+        sqs_msg.change_visibility(visibility_timeout: 120)
+      end
     end
 
     private
@@ -68,9 +79,18 @@ module Shoryuken
 
       @busy_processors.increment
 
+      @current_messages << sqs_msg
+
       Concurrent::Promise.execute(
         executor: @executor
-      ) { Processor.process(queue_name, sqs_msg) }.then { processor_done }.rescue { processor_done }
+      ) {
+        Processor.process(queue_name, sqs_msg) }.then {
+        @current_messages.delete(sqs_msg)
+        processor_done
+      }.rescue {
+        @current_messages.delete(sqs_msg)
+        processor_done
+      }
     end
 
     def dispatch_batch(queue)

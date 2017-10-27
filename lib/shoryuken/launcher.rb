@@ -47,6 +47,9 @@ module Shoryuken
     def initiate_stop
       logger.info { 'Shutting down' }
 
+      #change visability of current messages
+      @managers.each{|manager| manager.shutdown_callback }
+
       stop_callback
     end
 
